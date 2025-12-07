@@ -32,6 +32,7 @@ public partial class DynamicDesyncHelper : ResoniteMod
 
         private static void Postfix()
         {
+            if (!Config!.GetValue(enable)) return; 
             if (!Engine.Current.IsInitialized) return;
             if (Engine.Current.WorldManager.FocusedWorld == null) return;
             if (Engine.Current.WorldManager.FocusedWorld.IsAuthority) return;
