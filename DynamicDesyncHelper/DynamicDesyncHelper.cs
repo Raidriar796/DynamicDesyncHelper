@@ -1,15 +1,13 @@
 ﻿using ResoniteModLoader;
 using HarmonyLib;
 using FrooxEngine;
+using Elements.Core;
+using System.Diagnostics;
 
 namespace DynamicDesyncHelper;
 
 public partial class DynamicDesyncHelper : ResoniteMod
 {
-    [AutoRegisterConfigKey]
-    public static readonly ModConfigurationKey<bool> enable =
-        new("enable", "Enable DynamicDesyncHelper", () => true);
-
     public override string Name => "DynamicDesyncHelper";
     public override string Author => "Raidriar796";
     public override string Version => "1.0.0";
@@ -27,22 +25,73 @@ public partial class DynamicDesyncHelper : ResoniteMod
     [HarmonyPatch(typeof(User), "InternalRunUpdate")]
     private static class UpdateLoopHook
     {
-        private static int LWSBaseSize = 64;
-        private static int LWSStepSize = 32;
+        private static bool isIncreasing = true;
+        private static int lastQueuedCount = 0;
+        private static double elapsedTime = 0;
+        private static readonly Stopwatch stopwatch = Stopwatch.StartNew();
 
         private static void Postfix()
         {
-            RealtimeNetworkingSettings realtimeNetworkingSettings = Settings.GetActiveSetting<RealtimeNetworkingSettings>()!;
-            if (realtimeNetworkingSettings == null && !Engine.Current.IsInitialized) return;
+            if (!Engine.Current.IsInitialized) return;
             if (Engine.Current.WorldManager.FocusedWorld == null) return;
+            if (Engine.Current.WorldManager.FocusedWorld.IsAuthority) return;
 
-            if (Engine.Current.WorldManager.FocusedWorld.LocalUser.QueuedMessages >= 1)
+            RealtimeNetworkingSettings realtimeNetworkingSettings = Settings.GetActiveSetting<RealtimeNetworkingSettings>()!;
+            if (realtimeNetworkingSettings == null) return;
+
+            if (Engine.Current.WorldManager.FocusedWorld.LocalUser.QueuedMessages >= 1000)
             {
-                realtimeNetworkingSettings!.LNL_WindowSize.Value = LWSBaseSize + LWSStepSize;
+                if (lastQueuedCount < Engine.Current.WorldManager.FocusedWorld.LocalUser.QueuedMessages)
+                {
+                    if (!stopwatch.IsRunning) stopwatch.Restart();
+
+                    if (!isIncreasing)
+                    {
+                        stopwatch.Restart();
+                        isIncreasing = true;
+                    }
+
+                    elapsedTime = stopwatch.ElapsedMilliseconds / 1000;
+
+                    if (elapsedTime > Config!.GetValue(stepIncreaseInterval))
+                    {
+                        stopwatch.Restart();
+                        realtimeNetworkingSettings.LNL_WindowSize.Value = MathX.Min(realtimeNetworkingSettings.LNL_WindowSize.Value + Config.GetValue(LWSStepSize), 512);
+                        lastQueuedCount = Engine.Current.WorldManager.FocusedWorld.LocalUser.QueuedMessages;
+                    }
+                }
+                else 
+                {
+                    if (!stopwatch.IsRunning) stopwatch.Restart();
+
+                    if (isIncreasing)
+                    {
+                        stopwatch.Restart();
+                        isIncreasing = false;
+                    }
+
+                    elapsedTime = stopwatch.ElapsedMilliseconds / 1000;
+
+                    if (elapsedTime > Config!.GetValue(stepDecreaseInterval))
+                    {
+                        stopwatch.Restart();
+                        realtimeNetworkingSettings.LNL_WindowSize.Value = MathX.Max(realtimeNetworkingSettings.LNL_WindowSize.Value - Config.GetValue(LWSStepSize), Config.GetValue(LWSBaseSize));
+                        lastQueuedCount = Engine.Current.WorldManager.FocusedWorld.LocalUser.QueuedMessages;
+                    }
+                }
             }
             else
             {
-                realtimeNetworkingSettings!.LNL_WindowSize.Value = LWSBaseSize;
+                if (!stopwatch.IsRunning) stopwatch.Restart();
+
+                elapsedTime = stopwatch.ElapsedMilliseconds / 1000;
+
+                if (elapsedTime > Config!.GetValue(stepDecreaseInterval))
+                {
+                    stopwatch.Restart();
+                    realtimeNetworkingSettings.LNL_WindowSize.Value = MathX.Max(realtimeNetworkingSettings.LNL_WindowSize.Value - Config.GetValue(LWSStepSize), Config.GetValue(LWSBaseSize));
+                    lastQueuedCount = Engine.Current.WorldManager.FocusedWorld.LocalUser.QueuedMessages;
+                }
             }
         }
     }
